@@ -28,10 +28,7 @@ def convert_gate_cirq_to_gates(op, **kwargs):
     # TODO: handle global phases
 
     if isinstance(op.gate, cirq.XPowGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return Quantum_Gate("RX", op.qubits[0].x, angle=op.gate.exponent)
-        else:
-            return Quantum_Gate("RX", op.qubits[0].x, angle=0.5)
+        return Quantum_Gate("RX", op.qubits[0].x, angle=op.gate.exponent)
     
     elif isinstance(op.gate, cirq.CNotPowGate):
         return Quantum_Gate("CNOT", op.qubits[0].x, op.qubits[1].x)
@@ -43,24 +40,15 @@ def convert_gate_cirq_to_gates(op, **kwargs):
         return Quantum_Gate("CNOT", op.qubits[0].x, op.qubits[1].x)
     
     elif isinstance(op.gate, cirq.YPowGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return Quantum_Gate("RY", op.qubits[0].x, angle=op.gate.exponent)
-        else:
-            return Quantum_Gate("RY", op.qubits[0].x, angle=0.5)
+        return Quantum_Gate("RY", op.qubits[0].x, angle=op.gate.exponent)
     
-    # TODO: make this actually detect CCCRy gates (and implement a CCCY gate)
     elif isinstance(op.gate, cirq.ControlledGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return Quantum_Gate("RY", op.qubits[0].x, angle=op.gate.exponent)
-        else:
-            return Quantum_Gate("RY", op.qubits[0].x, angle=0.5)
+        return Quantum_Gate("CCCRY", op.qubits[0].x, angle=op.gate.sub_gate.exponent)
     
     elif isinstance(op.gate, cirq.ZPowGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return Quantum_Gate("RZ", op.qubits[0].x, angle=op.gate.exponent)
-        else:
-            return Quantum_Gate("RZ", op.qubits[0].x, angle=0.5)
-    
+        return Quantum_Gate("RZ", op.qubits[0].x, angle=op.gate.exponent)
+
+
 
 def convert_gate_cirq_to_qibo(op, **kwargs):
     """
@@ -75,10 +63,7 @@ def convert_gate_cirq_to_qibo(op, **kwargs):
     # TODO: take into account global phase
 
     if isinstance(op.gate, cirq.XPowGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return qibo.gates.RX(int(op.qubits[0].x), op.gate.exponent)
-        else:
-            return qibo.gates.RX(int(op.qubits[0].x), 0.5)
+        return qibo.gates.RX(int(op.qubits[0].x), op.gate.exponent)
     
     elif isinstance(op.gate, cirq.CNotPowGate):
         return qibo.gates.CNOT(int(op.qubits[0].x), int(op.qubits[1].x))
@@ -90,23 +75,13 @@ def convert_gate_cirq_to_qibo(op, **kwargs):
         return qibo.gates.CZ(int(op.qubits[0].x), int(op.qubits[1].x))
     
     elif isinstance(op.gate, cirq.YPowGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return qibo.gates.RY(int(op.qubits[0].x), op.gate.exponent)
-        else:
-            return qibo.gates.RY(int(op.qubits[0].x), 0.5)
+        return qibo.gates.RY(int(op.qubits[0].x), op.gate.exponent)
     
     elif isinstance(op.gate, cirq.ControlledGate):
-        # TODO: make this actually do a CCCRy gate
-        if isinstance(op.gate.exponent, numbers.Number):
-            return qibo.gates.RY(int(op.qubits[0].x), op.gate.exponent)
-        else:
-            return qibo.gates.RY(int(op.qubits[0].x), 0.5)
+        return qibo.gates.RY(int(op.qubits[-1].x), op.gate.sub_gate.exponent).controlled_by(int(op.qubits[0].x), int(op.qubits[1].x), int(op.qubits[2].x))
 
     elif isinstance(op.gate, cirq.ZPowGate):
-        if isinstance(op.gate.exponent, numbers.Number):
-            return qibo.gates.RZ(int(op.qubits[0].x), op.gate.exponent)
-        else:
-            return qibo.gates.RZ(int(op.qubits[0].x), 0.5)
+        return qibo.gates.RZ(int(op.qubits[0].x), op.gate.exponent)
 
 
 def convert_gate_gates_to_qibo(gate, **kwargs):
