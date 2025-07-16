@@ -239,6 +239,7 @@ def simulate_data_qibo(measurements, qibo_circuit, nqubits):
 
     return data_dict, data_dict_sn
 
+#change
 
 ##################################################################################################
 ###########                               Cirq                                       #############
