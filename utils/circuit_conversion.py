@@ -1,8 +1,9 @@
 import cirq
+from cirq_ionq import GPI2Gate, GPIGate, MSGate
 import tequila as tq
 import numpy as np
 from itertools import product
-import qibo
+# import qibo
 import numbers
 import copy
 
@@ -14,7 +15,7 @@ from Core_Definition import *
 from Visualization import *
 
 ####################################################################################################
-####################### Functions for converting between Gates, Cirq, and Qibo #####################
+####################### Functions for converting between Gates, Cirq #####################
 ####################################################################################################
 
 def convert_gate_cirq_to_gates(op, **kwargs):
@@ -51,50 +52,17 @@ def convert_gate_cirq_to_gates(op, **kwargs):
         return Quantum_Gate("RZ", op.qubits[0].x, angle=op.gate.exponent)
 
 
-def convert_gate_cirq_to_qibo(op, **kwargs):
-    """
-    Takes a cirq gate and converts it to a Qibo gate (or series of gates)
+def cz_to_cnot(op):
+    if isinstance(op.gate, cirq.CZPowGate) and op.gate.exponent == 1:
+        c, t = op.qubits
+        # Choose target as the *second* qubit in the CZ
+        return [
+            cirq.H(t),
+            cirq.CNOT(c, t),
+            cirq.H(t)
+        ]
+    return op
 
-    Inputs:
-        op: a cirq operation
-
-    Returns a qibo.gates object of the appropriate gate
-    """
-
-    if isinstance(op.gate, cirq.XPowGate):
-        return qibo.gates.RX(int(op.qubits[0].x), op.gate.exponent)
-    
-    elif isinstance(op.gate, cirq.CNotPowGate):
-        return qibo.gates.CNOT(int(op.qubits[0].x), int(op.qubits[1].x))
-    
-    elif isinstance(op.gate, cirq.HPowGate):
-        return qibo.gates.H(int(op.qubits[0].x))
-    
-    elif isinstance(op.gate, cirq.CZPowGate):
-        return qibo.gates.CZ(int(op.qubits[0].x), int(op.qubits[1].x))
-    
-    elif isinstance(op.gate, cirq.YPowGate):
-        return qibo.gates.RY(int(op.qubits[0].x), op.gate.exponent)
-    
-    elif isinstance(op.gate, cirq.ControlledGate):
-        return qibo.gates.RY(int(op.qubits[-1].x), op.gate.sub_gate.exponent).controlled_by(int(op.qubits[0].x), int(op.qubits[1].x), int(op.qubits[2].x))
-
-    elif isinstance(op.gate, cirq.ZPowGate):
-        return qibo.gates.RZ(int(op.qubits[0].x), op.gate.exponent)
-
-
-def convert_gate_gates_to_qibo(gate, **kwargs):
-    """
-    Takes a Gates Lab suite gate and converts it to a Qibo gate (or series of gates)
-
-    Inputs:
-        gate: a Gates Lab suite gate
-
-    Returns a qibo.gates object of the appropriate gate
-    """
-
-    # TODO: implement this...
-    pass
 
 
 def cirq_to_gates(circuit, nqubits, name=None):
@@ -111,24 +79,12 @@ def cirq_to_gates(circuit, nqubits, name=None):
     return gates_circuit
 
 
-def cirq_to_qibo(circuit, nqubits, name=None):
+def cirq_to_ionq_cirq(circuit, nqubits, name=None):
 
-    qibo_circuit = qibo.Circuit(nqubits, density_matrix=True)
+    new_circuit = circuit.map_operations(cz_to_cnot)
 
-    for moment in circuit:
-        for op in moment:
+    qubits = cirq.LineQubit.range(nqubits)
+    meas = cirq.measure(qubits, key='output')
+    new_circuit.append(meas)
 
-            qibo_gate = convert_gate_cirq_to_qibo(op)
-
-            qibo_circuit.add(qibo_gate)
-
-    return qibo_circuit
-
-
-def gates_to_qibo(circuit, nqubits, name=None):
-
-    # TODO: Implement this...
-
-    qibo_circuit = qibo.Circuit(nqubits, density_matrix=True)
-
-    pass
+    return new_circuit
