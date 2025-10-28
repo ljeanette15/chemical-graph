@@ -19,7 +19,8 @@ from qiskit.quantum_info import Kraus, SuperOp
 from qiskit.visualization import plot_histogram
 from qiskit.transpiler import generate_preset_pass_manager
 from qiskit_aer import AerSimulator
- 
+import qiskit_ionq
+
 # Import from Qiskit Aer noise module
 from qiskit_aer.noise import (
     NoiseModel,
@@ -35,6 +36,9 @@ from qiskit_aer import Aer
 from qiskit.quantum_info import SparsePauliOp, Statevector
 
 import qiskit
+
+from multiprocessing import Pool
+from functools import partial
 
 import sys
 sys.path.append("../Gates_Lab_Suite")
@@ -365,6 +369,7 @@ def tq_to_cirq_pauli(tq_pauli, qubits):
         return cirq.I(qubits[tq_pauli[0]])
 
 
+
 def simulate_data_cirq(H_dict, cirq_circuit, nqubits):
 
     res = []
@@ -385,8 +390,10 @@ def simulate_data_cirq(H_dict, cirq_circuit, nqubits):
         # Go through each character (j) in the pauli string (i) and add the appropriate gate for that basis
         for j in range(nqubits):
             pauli_char = list(H_dict.keys())[i][j]
-            if pauli_char not in ["I", "Z"]:
-                cirq_copy.append(measurment_gate_cirq(pauli_char, qubits[j]))
+            if pauli_char == "Y":
+                cirq_copy.append(cirq.rx(0.5 * np.pi)(qubits[j]))
+            elif pauli_char == "X":
+                cirq_copy.append(cirq.ry(-0.5 * np.pi)(qubits[j]))
 
         # Get results without shot noise
         result = cirq_simulator.simulate(cirq_copy)
@@ -398,36 +405,103 @@ def simulate_data_cirq(H_dict, cirq_circuit, nqubits):
     return data_dict
 
 
-def simulate_data_qiskit(H_dict, qiskit_circuit, nqubits):
-
-    res = []
+def simulate_data_qiskit(H_dict, qiskit_circuit, nqubits, noise_model=None):
 
     data_dict = {}
 
-    qiskit_simulator = Aer.get_backend("statevector_simulator")
+    qiskit_simulator = AerSimulator(method="density_matrix", noise_model=noise_model)
     
     # Go through each Pauli measurement basis
     for i in range(len(H_dict.keys())):
-
-        print(i, end="\r")
 
         # Need to make a new copy each time as to not overwrite the original
         qiskit_copy = copy.deepcopy(qiskit_circuit)
 
         # Go through each character (j) in the pauli string (i) and add the appropriate gate for that basis
         for j in range(nqubits):
+            
             pauli_char = list(H_dict.keys())[i][j]
-            if pauli_char not in ["I", "Z"]:
-                qiskit_copy.append(measurment_gate_qiskit(pauli_char, qubits[j]))
 
-        # Get results without shot noise
-        meas = SparsePauliOp.from_list([("Z" * nqubits, 1.0)])
-        state = qiskit_simulator.run(qiskit_copy).result().get_statevector()
-        result = Statevector(state).expectation_value(meas)
+            if pauli_char == "Y":
+                qiskit_copy.rx(0.5 * np.pi, j)
+            elif pauli_char == "X":
+                qiskit_copy.ry(-0.5 * np.pi, j)
 
-        res.append(abs(result ** 2))
+        qiskit_copy.save_density_matrix()
 
-        data_dict[list(H_dict.keys())[i]] = abs(result.final_state_vector ** 2)
+        result = qiskit_simulator.run(qiskit_copy).result()
+
+        rho = result.data(0)['density_matrix']
+
+        probabilities = rho.probabilities()
+        
+        reordered_probabilities = np.zeros_like(probabilities)
+        for k, p in enumerate(probabilities):
+            bitstring = format(k, f"0{nqubits}b")    # e.g. "01"
+            reversed_index = int(bitstring[::-1], 2)    # flip qubit order
+            reordered_probabilities[reversed_index] = p
+
+
+        data_dict[list(H_dict.keys())[i]] = reordered_probabilities
+
 
     return data_dict
 
+
+def simulate_data_qiskit_ionq(H_dict, qiskit_circuit, nqubits, nshots, num_processes=None):
+    
+    # Initialize the IonQ provider
+    provider = qiskit_ionq.IonQProvider()
+    backend = provider.get_backend("ionq_simulator")
+    backend.set_options(noise_model="aria-1")
+    
+    pauli_strings = list(H_dict.keys())
+    
+    # Create a partial function with fixed arguments
+    process_func = partial(
+        _process_single_pauli,
+        H_dict=H_dict,
+        qiskit_circuit=qiskit_circuit,
+        nqubits=nqubits,
+        nshots=nshots,
+        backend=backend
+    )
+    
+    # Use multiprocessing Pool
+    with Pool(processes=num_processes) as pool:
+        results = pool.map(process_func, pauli_strings)
+    
+    # Convert list of tuples back to dictionary
+    data_dict = dict(results)
+    
+    return data_dict
+
+
+def _process_single_pauli(pauli_string, H_dict, qiskit_circuit, nqubits, nshots, backend):
+    """Helper function to process a single Pauli measurement basis"""
+    
+    print(f"Measuring: {pauli_string}")
+    
+    # Make a copy of the circuit
+    qiskit_copy = copy.deepcopy(qiskit_circuit)
+    
+    # Add basis rotation gates
+    for j in range(nqubits):
+        pauli_char = pauli_string[j]
+        
+        if pauli_char == "Y":
+            qiskit_copy.rx(0.5 * np.pi, j)
+        elif pauli_char == "X":
+            qiskit_copy.ry(-0.5 * np.pi, j)
+    
+    qiskit_copy.save_density_matrix()
+    
+    # Submit the job
+    job = backend.run(qiskit_copy, shots=nshots)
+    
+    # Get results
+    result = job.result()
+    probabilities = result.get_probabilities()
+    
+    # Return tuple of (pauli_string, result)
+    return (pauli_string, np.array(list(probabilities.values())))
