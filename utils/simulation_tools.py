@@ -42,12 +42,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from functools import partial
 
-import sys
-sys.path.append("../Gates_Lab_Suite")
-
-from Auto_Algorithm import *
-from Core_Definition import *
-from Visualization import *
 
 
 ##################################################################################################
@@ -235,6 +229,32 @@ def convert_population_data_to_expectation_values(res_dict):
         expectation_value = measurement.diagonal() @ res_dict[pauli_string]
 
         ev_dict[pauli_string] = expectation_value
+
+    return ev_dict
+
+
+def convert_reduced_population_data_to_expectation_values(res_dict, reduced_meas_dict):
+
+    ev_dict = {}
+
+    for pauli_key in res_dict.keys():
+
+        for pauli_string in reduced_meas_dict[pauli_key]:
+
+            # Go through and construct the kronecker product of the Paulis as matrices
+            measurement = expectation_value_measurements(pauli_string[0])
+            for i in range(1, len(pauli_string)):
+                measurement = np.kron(measurement, expectation_value_measurements(pauli_string[i]))
+
+            # The expectation value of this pauli is just the inner product of the diagonals and the state probabilities  
+            
+            expectation_value = measurement.diagonal() @ res_dict[pauli_key]
+
+            ev_dict[pauli_string] = expectation_value
+        
+    # Add identity measurement (this should always just be 1, right?)
+    id_string = "I" * len(pauli_key)
+    ev_dict[id_string] = 1
 
     return ev_dict
 
@@ -500,7 +520,7 @@ def simulate_data_qiskit_ionq(H_dict, qiskit_circuit, nqubits, nshots, noise_mod
         }
         
         # Process completed tasks with progress bar
-        with tqdm(total=total, desc="Processing Pauli strings") as pbar:
+        with tqdm(total=total, desc=f"Simulating with noise model: {noise_model}") as pbar:
             for future in as_completed(future_to_pauli):
                 pauli_string, result = future.result()
                 data_dict[pauli_string] = result
