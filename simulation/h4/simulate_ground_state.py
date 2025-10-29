@@ -57,6 +57,20 @@ def define_molecule(molecule="h2", spacing=1.5, transformation="JordanWigner"):
 
 
 def define_G1_circuit(mol):
+    """
+    Gets the G1 circuit for a given molecule. G1 is the simplest approximation in 
+        this formulation. For example, H4 is just broken down into two H2 pairs.
+
+    Inputs:
+        mol: a tequila molecule object.
+
+    Outputs: 
+        qiskit: A qiskit circuit to prepare the state using the unitary
+        cirq: A cirq circuit to prepare the state using the unitary
+        energy: The calculated energy (using the unitary and Hamiltonian)
+        H: The Hamiltonian which is used to measure the energy
+    
+    """
 
     edges = []
     for i in range(int(mol.n_orbitals/2)):
@@ -93,7 +107,11 @@ def define_G1_circuit(mol):
 
 
 def define_G2_circuit(mol):
-    """ ToDo """
+    """ 
+    
+    To Do 
+    
+    """
     edges = []
     for i in range(int(mol.n_orbitals/2)):
         edges.append((2*i, 2*i+1))
@@ -128,7 +146,15 @@ def define_G2_circuit(mol):
     return qiskit, cirq, energy, H
 
 
-def plot_probabilities(data, labels, basis):
+def plot_probabilities(data, labels, basis=None):
+    """
+    Plots the state populations for each set of populations in data. 
+
+    inputs:
+        data: a list of state populations
+        labels: a list of labels for each population set in data
+        basis: the measurement basis (just for the title)
+    """
     n_datasets = len(data)
     n_states = len(data[0])
     
@@ -165,7 +191,7 @@ if __name__ == '__main__':
     print("----------------------------------")
 
     # Get circuits for calculating energy
-    qiskit_circuit, cirq_circuit, energy, H = define_G1_circuit(mol, fci)
+    qiskit_circuit, cirq_circuit, energy, H = define_G1_circuit(mol)
 
     print(f"difference from fci: {abs(energy-fci)*1000} mH")
     print("----------------------------------")
