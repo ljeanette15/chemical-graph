@@ -38,6 +38,8 @@ from qiskit.quantum_info import SparsePauliOp, Statevector
 import qiskit
 
 from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 from functools import partial
 
 import sys
@@ -229,6 +231,7 @@ def convert_population_data_to_expectation_values(res_dict):
             measurement = np.kron(measurement, expectation_value_measurements(pauli_string[i]))
 
         # The expectation value of this pauli is just the inner product of the diagonals and the state probabilities  
+        
         expectation_value = measurement.diagonal() @ res_dict[pauli_string]
 
         ev_dict[pauli_string] = expectation_value
@@ -405,82 +408,113 @@ def simulate_data_cirq(H_dict, cirq_circuit, nqubits):
     return data_dict
 
 
-def simulate_data_qiskit(H_dict, qiskit_circuit, nqubits, noise_model=None):
+# def simulate_data_qiskit_shotnoise
 
-    data_dict = {}
-
-    qiskit_simulator = AerSimulator(method="density_matrix", noise_model=noise_model)
+def simulate_data_qiskit(H_dict, qiskit_circuit, nqubits, noise_model=None, nshots=None):
+    """
+    Simulate quantum circuit measurements in different Pauli bases with shot noise.
     
-    # Go through each Pauli measurement basis
-    for i in range(len(H_dict.keys())):
-
-        # Need to make a new copy each time as to not overwrite the original
-        qiskit_copy = copy.deepcopy(qiskit_circuit)
-
-        # Go through each character (j) in the pauli string (i) and add the appropriate gate for that basis
-        for j in range(nqubits):
-            
-            pauli_char = list(H_dict.keys())[i][j]
-
-            if pauli_char == "Y":
-                qiskit_copy.rx(0.5 * np.pi, j)
-            elif pauli_char == "X":
-                qiskit_copy.ry(-0.5 * np.pi, j)
-
-        qiskit_copy.save_density_matrix()
-
-        result = qiskit_simulator.run(qiskit_copy).result()
-
-        rho = result.data(0)['density_matrix']
-
-        probabilities = rho.probabilities()
+    Args:
+        H_dict: Dictionary with Pauli strings as keys
+        qiskit_circuit: Base quantum circuit to simulate
+        nqubits: Number of qubits
+        noise_model: Optional noise model for simulation
+        shots: Number of measurement shots (None for exact probabilities via density matrix)
         
-        reordered_probabilities = np.zeros_like(probabilities)
-        for k, p in enumerate(probabilities):
-            bitstring = format(k, f"0{nqubits}b")    # e.g. "01"
-            reversed_index = int(bitstring[::-1], 2)    # flip qubit order
-            reordered_probabilities[reversed_index] = p
+    Returns:
+        Dictionary mapping Pauli strings to probability distributions
+    """
+    data_dict = {}
+    
+    if nshots is None:
+        # Use density matrix for exact probabilities (original behavior)
+        qiskit_simulator = AerSimulator(method="density_matrix", noise_model=noise_model)
+        use_density_matrix = True
+    else:
+        # Use statevector or automatic method with measurements
+        qiskit_simulator = AerSimulator(noise_model=noise_model)
+        use_density_matrix = False
+    
+    # Pre-compute bit reversal mapping
+    bit_reversal_map = np.array([int(format(k, f"0{nqubits}b")[::-1], 2) 
+                                  for k in range(2**nqubits)])
+    
+    for pauli_string in H_dict.keys():
 
+        qiskit_copy = copy.deepcopy(qiskit_circuit)
+        clean_circuit = QuantumCircuit(qiskit_copy.num_qubits)
+        for instruction in qiskit_copy.data:
+            if instruction.operation.name not in ['measure', 'barrier']:
+                clean_circuit.append(instruction)
+        qiskit_copy = clean_circuit
+        
+        # Apply basis change gates
+        for qubit_idx, pauli_char in enumerate(pauli_string):
+            if pauli_char == "Y":
+                qiskit_copy.rx(np.pi/2, qubit_idx)
+            elif pauli_char == "X":
+                qiskit_copy.ry(-np.pi/2, qubit_idx)
+        
+        if use_density_matrix:
+            qiskit_copy.save_density_matrix()
+            result = qiskit_simulator.run(qiskit_copy).result()
+            rho = result.data(0)['density_matrix']
+            probabilities = rho.probabilities()
+        else:
+            # Add measurements
+            qiskit_copy.measure_all()
+            result = qiskit_simulator.run(qiskit_copy, shots=nshots).result()
+            counts = result.get_counts()
+            
+            # Convert counts to probability distribution
+            probabilities = np.zeros(2**nqubits)
+            for bitstring, count in counts.items():
 
-        data_dict[list(H_dict.keys())[i]] = reordered_probabilities
-
-
+                index = int(bitstring, 2)
+                probabilities[index] = count / nshots
+        
+        # Qiskit bitstrings are in reverse order (qubit 0 is on the right)
+        reordered_probabilities = probabilities[bit_reversal_map]
+        data_dict[pauli_string] = reordered_probabilities
+    
     return data_dict
 
 
-def simulate_data_qiskit_ionq(H_dict, qiskit_circuit, nqubits, nshots, num_processes=None):
+def simulate_data_qiskit_ionq(H_dict, qiskit_circuit, nqubits, nshots, noise_model=None, num_threads=8):
     
-    # Initialize the IonQ provider
+    
     provider = qiskit_ionq.IonQProvider()
     backend = provider.get_backend("ionq_simulator")
-    backend.set_options(noise_model="aria-1")
-    
+    backend.set_options(noise_model=noise_model)
+
     pauli_strings = list(H_dict.keys())
+    total = len(pauli_strings)
     
-    # Create a partial function with fixed arguments
-    process_func = partial(
-        _process_single_pauli,
-        H_dict=H_dict,
-        qiskit_circuit=qiskit_circuit,
-        nqubits=nqubits,
-        nshots=nshots,
-        backend=backend
-    )
+    data_dict = {}
     
-    # Use multiprocessing Pool
-    with Pool(processes=num_processes) as pool:
-        results = pool.map(process_func, pauli_strings)
-    
-    # Convert list of tuples back to dictionary
-    data_dict = dict(results)
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        # Submit all tasks
+        future_to_pauli = {
+            executor.submit(_process_single_pauli, pauli, qiskit_circuit, nqubits, nshots, backend): pauli
+            for pauli in pauli_strings
+        }
+        
+        # Process completed tasks with progress bar
+        with tqdm(total=total, desc="Processing Pauli strings") as pbar:
+            for future in as_completed(future_to_pauli):
+                pauli_string, result = future.result()
+                data_dict[pauli_string] = result
+                pbar.update(1)
     
     return data_dict
 
 
-def _process_single_pauli(pauli_string, H_dict, qiskit_circuit, nqubits, nshots, backend):
+def _process_single_pauli(pauli_string, qiskit_circuit, nqubits, nshots, backend):
     """Helper function to process a single Pauli measurement basis"""
     
-    print(f"Measuring: {pauli_string}")
+    # Pre-compute bit reversal mapping
+    bit_reversal_map = np.array([int(format(k, f"0{nqubits}b")[::-1], 2) 
+                                  for k in range(2**nqubits)])
     
     # Make a copy of the circuit
     qiskit_copy = copy.deepcopy(qiskit_circuit)
@@ -493,15 +527,26 @@ def _process_single_pauli(pauli_string, H_dict, qiskit_circuit, nqubits, nshots,
             qiskit_copy.rx(0.5 * np.pi, j)
         elif pauli_char == "X":
             qiskit_copy.ry(-0.5 * np.pi, j)
-    
-    qiskit_copy.save_density_matrix()
-    
+        
     # Submit the job
     job = backend.run(qiskit_copy, shots=nshots)
     
     # Get results
     result = job.result()
     probabilities = result.get_probabilities()
+
+    # Create full probability array with all 2^n states
+    num_states = 2 ** nqubits
+    full_probs = np.zeros(num_states)
     
+    # Fill in the non-zero probabilities
+    for state, prob in probabilities.items():
+        # Convert binary string to integer index
+        index = int(state, 2)
+        full_probs[index] = prob
+
+    # Need to reverse the probabilities (because in Qiskit the msb is on the right)
+    reordered_probabilities = full_probs[bit_reversal_map]
+
     # Return tuple of (pauli_string, result)
-    return (pauli_string, np.array(list(probabilities.values())))
+    return (pauli_string, reordered_probabilities)
